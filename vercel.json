@@ -1,4 +1,8 @@
 {
   "buildCommand": "npm run build",
-  "outputDirectory": ".output/public"
+  "outputDirectory": ".output/public",
+  "framework": "vite",
+  "env": {
+    "NITRO_PRESET": "vercel"
+  }
 }
