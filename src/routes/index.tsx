@@ -303,7 +303,7 @@ function NumberInput({
   step: number;
   subdued?: boolean;
   highlight?: boolean;
-} & React.InputHTMLAttributes<HTMLInputElement>) {
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "step" | "type">) {
   return (
     <input
       type="number"
