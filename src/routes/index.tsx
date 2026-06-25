@@ -1,17 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { SIMULATORS, type LayoutId, type SimulatorId } from "@/lib/setup-types";
 import {
   CHARACTERISTICS,
-  SIMULATORS,
-  type LayoutId,
-  type SimulatorId,
-} from "@/lib/setup-types";
-import {
   CHARACTERISTIC_GROUPS,
   computeCarScores,
   generateSummary,
+  normalizeCarClass,
+  paramGroupLabel,
   type CarParamValues,
+  type Attribute,
 } from "@/lib/calculations";
+import {
+  getAttributeGuide,
+  ATTRIBUTE_LABELS,
+  PARAM_KEY_TO_GROUP,
+  type ParamGroup,
+} from "@/lib/coefficients";
 import {
   BUILT_IN_CARS,
   TAB_ORDER,
@@ -21,6 +26,7 @@ import {
   type ParameterDef,
 } from "@/car_data/data";
 import { AddCarModal } from "@/components/AddCarModal";
+
 
 export const Route = createFileRoute("/")({
   head: () => ({
