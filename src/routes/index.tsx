@@ -1,20 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CHARACTERISTICS,
   LAYOUTS,
   SIMULATORS,
   type LayoutId,
-  type SettingKey,
   type SimulatorId,
 } from "@/lib/setup-types";
-import { SETTINGS, TIER_LABELS } from "@/lib/setup-config";
+import { CHARACTERISTIC_GROUPS, computeScores, generateSummary, makeDefaultValues } from "@/lib/calculations";
 import {
-  CHARACTERISTIC_GROUPS,
-  computeScores,
-  generateSummary,
-  makeDefaultValues,
-} from "@/lib/calculations";
+  BUILT_IN_CARS,
+  TAB_ORDER,
+  loadUserCars,
+  saveUserCars,
+  type CarProfile,
+  type ParameterDef,
+} from "@/car_data/data";
+import { AddCarModal } from "@/components/AddCarModal";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -28,31 +30,77 @@ export const Route = createFileRoute("/")({
   component: SetupLab,
 });
 
+type CarParamValues = Record<string, { baseline: number; current: number }>;
+
+function makeCarValues(car: CarProfile): CarParamValues {
+  const out: CarParamValues = {};
+  for (const p of car.parameters) {
+    const mid = (p.min + p.max) / 2;
+    out[p.key] = { baseline: mid, current: mid };
+  }
+  return out;
+}
+
 function SetupLab() {
   const [sim, setSim] = useState<SimulatorId>("acc");
   const [layout, setLayout] = useState<LayoutId>("mr_rwd");
-  const [values, setValues] = useState(makeDefaultValues);
+  const [userCars, setUserCars] = useState<CarProfile[]>([]);
+  const [selectedCarId, setSelectedCarId] = useState<string>("");
+  const [showAddCar, setShowAddCar] = useState(false);
+  const [carValues, setCarValues] = useState<CarParamValues>({});
 
-  const scores = useMemo(() => computeScores(values, layout), [values, layout]);
+  // Hydrate user cars from localStorage (client only)
+  useEffect(() => {
+    setUserCars(loadUserCars());
+  }, []);
+
+  const allCars = useMemo(() => [...BUILT_IN_CARS, ...userCars], [userCars]);
+  const selectedCar = allCars.find((c) => c.id === selectedCarId) ?? null;
+
+  // Reset values when car changes
+  useEffect(() => {
+    if (selectedCar) setCarValues(makeCarValues(selectedCar));
+    else setCarValues({});
+  }, [selectedCarId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const defaultValues = useMemo(() => makeDefaultValues(), []);
+  const scores = useMemo(() => computeScores(defaultValues, layout), [defaultValues, layout]);
   const summary = useMemo(() => generateSummary(scores), [scores]);
-
-  const setVal = (key: SettingKey, which: "baseline" | "current", n: number) => {
-    setValues((v) => ({ ...v, [key]: { ...v[key], [which]: n } }));
-  };
-
-  const resetCurrent = () =>
-    setValues((v) => {
-      const out = { ...v };
-      for (const s of SETTINGS) out[s.key] = { ...out[s.key], current: out[s.key].baseline };
-      return out;
-    });
-
-  const tier1 = SETTINGS.filter((s) => s.tier === 1);
-  const tier2 = SETTINGS.filter((s) => s.tier === 2);
-  const tier3 = SETTINGS.filter((s) => s.tier === 3);
 
   const simName = SIMULATORS.find((s) => s.id === sim)?.name ?? "";
   const layoutName = LAYOUTS.find((l) => l.id === layout)?.name ?? "";
+
+  const handleAddCar = (car: CarProfile) => {
+    const next = [...userCars, car];
+    setUserCars(next);
+    saveUserCars(next);
+    setSelectedCarId(car.id);
+    setShowAddCar(false);
+  };
+
+  const setCarVal = (key: string, which: "baseline" | "current", n: number) => {
+    setCarValues((v) => ({ ...v, [key]: { ...v[key], [which]: n } }));
+  };
+
+  const groupedParams = useMemo(() => {
+    if (!selectedCar) return [];
+    const map = new Map<string, ParameterDef[]>();
+    for (const p of selectedCar.parameters) {
+      const arr = map.get(p.tab) ?? [];
+      arr.push(p);
+      map.set(p.tab, arr);
+    }
+    const ordered: { tab: string; params: ParameterDef[] }[] = [];
+    for (const tab of TAB_ORDER) {
+      const params = map.get(tab);
+      if (params && params.length > 0) ordered.push({ tab, params });
+    }
+    // any tab not in TAB_ORDER
+    for (const [tab, params] of map.entries()) {
+      if (!TAB_ORDER.includes(tab)) ordered.push({ tab, params });
+    }
+    return ordered;
+  }, [selectedCar]);
 
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-accent/30">
@@ -66,24 +114,21 @@ function SetupLab() {
               </div>
               <span className="text-sm font-medium tracking-tight">SetupLab</span>
             </div>
-            <nav className="hidden items-center gap-1 md:flex">
-              <span className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground">Telemetry</span>
-            </nav>
           </div>
 
-          <div className="flex items-center gap-4">
-            <Selector
-              label="Sim"
-              value={sim}
-              onChange={(v) => setSim(v as SimulatorId)}
-              options={SIMULATORS.map((s) => ({ id: s.id, name: s.name }))}
-            />
+          <div className="flex items-center gap-3 flex-wrap">
+            <Selector label="Sim" value={sim} onChange={(v) => setSim(v as SimulatorId)} options={SIMULATORS.map((s) => ({ id: s.id, name: s.name }))} />
             <div className="hidden h-6 w-px bg-border sm:block" />
-            <Selector
-              label="Layout"
-              value={layout}
-              onChange={(v) => setLayout(v as LayoutId)}
-              options={LAYOUTS.map((l) => ({ id: l.id, name: l.name }))}
+            <Selector label="Layout" value={layout} onChange={(v) => setLayout(v as LayoutId)} options={LAYOUTS.map((l) => ({ id: l.id, name: l.name }))} />
+            <div className="hidden h-6 w-px bg-border sm:block" />
+            <CarSelector
+              value={selectedCarId}
+              builtIn={BUILT_IN_CARS}
+              userCars={userCars}
+              onSelect={(id) => {
+                if (id === "__add__") setShowAddCar(true);
+                else setSelectedCarId(id);
+              }}
             />
           </div>
         </div>
@@ -92,44 +137,52 @@ function SetupLab() {
       <main className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
         {/* Sidebar — Setup inputs */}
         <aside className="w-[22rem] shrink-0 overflow-y-auto border-r border-border bg-background/40">
-          <div className="space-y-8 p-6">
-            <SettingSection title={TIER_LABELS[1]} accent>
-              {tier1.map((s) => (
-                <SettingRow key={s.key} def={s} value={values[s.key]} onChange={setVal} />
-              ))}
-            </SettingSection>
+          {!selectedCar ? (
+            <div className="flex h-full items-center justify-center p-6 text-center">
+              <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+                Select a car to begin
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-8 p-6">
+              <div className="space-y-1">
+                <div className="text-sm font-medium text-foreground">{selectedCar.name}</div>
+                <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                  {selectedCar.class} · {selectedCar.drive} · {selectedCar.engineLayout}
+                </div>
+              </div>
 
-            <SettingSection title={TIER_LABELS[2]}>
-              {tier2.map((s) => (
-                <SettingRow key={s.key} def={s} value={values[s.key]} onChange={setVal} />
+              {groupedParams.map(({ tab, params }) => (
+                <section key={tab}>
+                  <div className="mb-4 flex items-center justify-between">
+                    <h2 className="font-mono text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">{tab}</h2>
+                  </div>
+                  <div className="space-y-3">
+                    {params.map((p) => (
+                      <ParamRow
+                        key={p.key}
+                        def={p}
+                        value={carValues[p.key] ?? { baseline: p.min, current: p.min }}
+                        onChange={setCarVal}
+                      />
+                    ))}
+                  </div>
+                </section>
               ))}
-            </SettingSection>
-
-            <SettingSection title={TIER_LABELS[3]}>
-              {tier3.map((s) => (
-                <SettingRow key={s.key} def={s} value={values[s.key]} onChange={setVal} compact />
-              ))}
-            </SettingSection>
-
-            <button
-              onClick={resetCurrent}
-              className="w-full rounded border border-border bg-secondary px-3 py-2 text-xs font-medium uppercase tracking-widest text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Reset Current → Baseline
-            </button>
-          </div>
+            </div>
+          )}
         </aside>
 
         {/* Canvas */}
         <section className="flex-1 overflow-y-auto bg-background p-8">
           <div className="mx-auto max-w-4xl space-y-12">
-            {/* Characteristic bars */}
             <div className="grid grid-cols-1 gap-6">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-medium text-foreground">Vehicle Characteristics</h3>
                   <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                     {simName} · {layoutName}
+                    {selectedCar ? ` · ${selectedCar.name}` : ""}
                   </p>
                 </div>
                 <div className="flex items-center gap-4">
@@ -146,13 +199,10 @@ function SetupLab() {
               </div>
             </div>
 
-            {/* Grouped breakdowns */}
             <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border ring-1 ring-white/5 sm:grid-cols-2 lg:grid-cols-3">
               {CHARACTERISTIC_GROUPS.map((group) => (
                 <div key={group.title} className="space-y-4 bg-background p-4">
-                  <h4 className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                    {group.title}
-                  </h4>
+                  <h4 className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{group.title}</h4>
                   <div className="space-y-3">
                     {group.items.map((item) => {
                       const d = scores[item.key].delta;
@@ -162,9 +212,7 @@ function SetupLab() {
                             <div className={`size-1 rounded-full ${dotColor(d)}`} />
                             <span className="text-xs text-foreground/90">{item.label}</span>
                           </div>
-                          <span className={`font-mono text-[10px] ${textColor(d)}`}>
-                            {fmtDelta(d)}
-                          </span>
+                          <span className={`font-mono text-[10px] ${textColor(d)}`}>{fmtDelta(d)}</span>
                         </div>
                       );
                     })}
@@ -173,36 +221,22 @@ function SetupLab() {
               ))}
             </div>
 
-            {/* Summary */}
             <div className="relative overflow-hidden rounded-lg border border-accent/10 bg-accent/5 p-6">
-              <div className="absolute right-0 top-0 p-3 opacity-10">
-                <span className="font-mono text-4xl">AI</span>
-              </div>
               <div className="relative z-10 space-y-3">
                 <h3 className="font-mono text-xs uppercase tracking-widest text-accent">Engineer's Summary</h3>
-                <p className="max-w-[64ch] text-pretty text-sm leading-relaxed text-foreground/90">
-                  {summary}
-                </p>
+                <p className="max-w-[64ch] text-pretty text-sm leading-relaxed text-foreground/90">{summary}</p>
               </div>
             </div>
-
-            <footer className="flex items-end justify-between border-t border-border pt-8">
-              <div className="space-y-1">
-                <div className="font-mono text-[10px] uppercase text-muted-foreground">Session</div>
-                <div className="font-mono text-xs text-foreground/80">SL-{sim.toUpperCase()}-{layout.toUpperCase()}</div>
-              </div>
-              <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                Coefficients editable in <span className="text-foreground/70">src/lib/coefficients.ts</span>
-              </div>
-            </footer>
           </div>
         </section>
       </main>
+
+      {showAddCar ? <AddCarModal onClose={() => setShowAddCar(false)} onAdd={handleAddCar} /> : null}
     </div>
   );
 }
 
-/* ───────────── helpers / subcomponents ───────────── */
+/* ───────────── subcomponents ───────────── */
 
 function Selector({
   label,
@@ -233,55 +267,76 @@ function Selector({
   );
 }
 
-function SettingSection({ title, accent, children }: { title: string; accent?: boolean; children: React.ReactNode }) {
+function CarSelector({
+  value,
+  builtIn,
+  userCars,
+  onSelect,
+}: {
+  value: string;
+  builtIn: CarProfile[];
+  userCars: CarProfile[];
+  onSelect: (id: string) => void;
+}) {
   return (
-    <section>
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="font-mono text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">{title}</h2>
-        {accent ? <span className="size-1.5 rounded-full bg-accent" /> : null}
-      </div>
-      <div className="space-y-3">{children}</div>
-    </section>
+    <label className="flex items-center gap-2">
+      <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Choose Car:</span>
+      <select
+        value={value}
+        onChange={(e) => onSelect(e.target.value)}
+        className="rounded border border-border bg-secondary px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-accent"
+      >
+        <option value="">— Select —</option>
+        <optgroup label="Built-in">
+          {builtIn.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </optgroup>
+        {userCars.length > 0 ? (
+          <optgroup label="── Your Cars ──">
+            {userCars.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </optgroup>
+        ) : null}
+        <optgroup label="──────────">
+          <option value="__add__">+ Add a Car</option>
+        </optgroup>
+      </select>
+    </label>
   );
 }
 
-function SettingRow({
+function ParamRow({
   def,
   value,
   onChange,
-  compact,
 }: {
-  def: typeof SETTINGS[number];
+  def: ParameterDef;
   value: { baseline: number; current: number };
-  onChange: (k: SettingKey, which: "baseline" | "current", n: number) => void;
-  compact?: boolean;
+  onChange: (key: string, which: "baseline" | "current", n: number) => void;
 }) {
   const delta = value.current - value.baseline;
   const changed = Math.abs(delta) > 1e-6;
+  const step = def.clicks > 0 ? (def.max - def.min) / def.clicks : 1;
   return (
-    <div className={`rounded border border-border/60 bg-surface/40 p-2 ${compact ? "" : ""}`}>
+    <div className="rounded border border-border/60 bg-surface/40 p-2">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[11px] font-medium text-foreground/90">{def.label}</span>
         <span className="font-mono text-[10px] text-muted-foreground">{def.unit}</span>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <NumberInput
-          aria-label={`${def.label} baseline`}
-          value={value.baseline}
-          step={def.unitStep}
-          onChange={(n) => onChange(def.key, "baseline", n)}
-          subdued
-        />
-        <NumberInput
-          aria-label={`${def.label} current`}
-          value={value.current}
-          step={def.unitStep}
-          onChange={(n) => onChange(def.key, "current", n)}
-          highlight={changed}
-        />
+        <NumberInput value={value.baseline} step={step} onChange={(n) => onChange(def.key, "baseline", n)} subdued />
+        <NumberInput value={value.current} step={step} onChange={(n) => onChange(def.key, "current", n)} highlight={changed} />
       </div>
       <div className="mt-1 flex items-center justify-between">
-        <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground/70">Baseline · Current</span>
+        <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground/70">
+          Range {roundSmart(def.min)}–{roundSmart(def.max)}
+        </span>
         <span className={`font-mono text-[10px] ${changed ? textColor(delta) : "text-muted-foreground/70"}`}>
           {changed ? `${delta > 0 ? "+" : ""}${roundSmart(delta)}` : "—"}
         </span>
@@ -296,14 +351,13 @@ function NumberInput({
   step,
   subdued,
   highlight,
-  ...rest
 }: {
   value: number;
   onChange: (n: number) => void;
   step: number;
   subdued?: boolean;
   highlight?: boolean;
-} & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "step" | "type">) {
+}) {
   return (
     <input
       type="number"
@@ -321,7 +375,6 @@ function NumberInput({
             ? "border-accent/40 bg-surface text-accent"
             : "border-border bg-surface text-foreground",
       ].join(" ")}
-      {...rest}
     />
   );
 }
@@ -334,16 +387,11 @@ function CharacteristicBar({ label, baseline, current, delta }: { label: string;
         <span className={`font-mono ${textColor(delta)}`}>{fmtDelta(delta)}</span>
       </div>
       <div className="relative h-2 overflow-hidden rounded-full bg-secondary">
-        {/* baseline ghost */}
         <div className="absolute inset-y-0 left-0 bg-muted opacity-70" style={{ width: `${baseline}%` }} />
-        {/* current */}
         <div
-          className={`absolute inset-y-0 left-0 transition-all duration-300 ${
-            delta >= 0 ? "bg-accent" : "bg-[var(--danger)]"
-          }`}
+          className={`absolute inset-y-0 left-0 transition-all duration-300 ${delta >= 0 ? "bg-accent" : "bg-[var(--danger)]"}`}
           style={{ width: `${current}%` }}
         />
-        {/* baseline tick */}
         <div className="absolute inset-y-0 w-px bg-foreground/30" style={{ left: `${baseline}%` }} />
       </div>
     </div>
@@ -384,3 +432,6 @@ function roundSmart(n: number): string {
   if (Math.abs(n) >= 1) return n.toFixed(1);
   return n.toFixed(2);
 }
+
+// suppress unused warnings (kept for future per-car-driven scoring)
+void makeDefaultValues;
