@@ -87,15 +87,13 @@ function SetupLab() {
   }, [selectedCarId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const scores = useMemo(() => {
-    if (!selectedCar) {
-      // neutral scores when nothing selected
-      return computeCarScores({}, [], layout);
-    }
-    return computeCarScores(carValues, selectedCar.parameters, layout);
-  }, [carValues, selectedCar, layout]);
+    return computeCarScores(carValues, selectedCar?.parameters ?? [], selectedCar);
+  }, [carValues, selectedCar]);
 
   const summary = useMemo(() => generateSummary(scores), [scores]);
   const simName = SIMULATORS.find((s) => s.id === sim)?.name ?? "";
+
+  const [guideAttr, setGuideAttr] = useState<Attribute | null>(null);
 
   const handleAddCar = (car: CarProfile) => {
     const next = [...userCars, car];
@@ -105,6 +103,25 @@ function SetupLab() {
     setShowAddCar(false);
   };
 
+  const handleDeleteUserCar = (id: string) => {
+    const next = userCars.filter((c) => c.id !== id);
+    setUserCars(next);
+    saveUserCars(next);
+    if (selectedCarId === id) setSelectedCarId("");
+  };
+
+  const handleReset = () => {
+    if (!selectedCar) return;
+    setCarValues((prev) => {
+      const next: CarParamValues = { ...prev };
+      for (const p of selectedCar.parameters) {
+        const mid = (p.min + p.max) / 2;
+        next[p.key] = { baseline: mid, current: mid };
+      }
+      return next;
+    });
+  };
+
   const setCarVal = (def: ParameterDef, which: "baseline" | "current", n: number) => {
     const clamped = Math.max(def.min, Math.min(def.max, n));
     setCarValues((v) => ({
@@ -112,6 +129,7 @@ function SetupLab() {
       [def.key]: { ...(v[def.key] ?? { baseline: clamped, current: clamped }), [which]: clamped },
     }));
   };
+
 
   const groupedParams = useMemo(() => {
     if (!selectedCar) return [];
