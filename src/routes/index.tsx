@@ -221,7 +221,7 @@ function SetupLab() {
         <section className="flex-1 overflow-y-auto bg-background p-8">
           <div className="mx-auto max-w-4xl space-y-12">
             <div className="grid grid-cols-1 gap-6">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-medium text-foreground">Vehicle Characteristics</h3>
                   <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
@@ -232,13 +232,30 @@ function SetupLab() {
                 <div className="flex items-center gap-4">
                   <Legend swatchClass="bg-muted" label="Baseline" />
                   <Legend swatchClass="bg-accent" label="Current" />
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    disabled={!selectedCar}
+                    className="rounded border border-border bg-secondary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-foreground hover:bg-accent/20 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Reset
+                  </button>
                 </div>
               </div>
 
               <div className="space-y-5">
                 {CHARACTERISTICS.map((c) => {
                   const s = scores[c.key];
-                  return <CharacteristicBar key={c.key} label={c.label} baseline={s.baseline} current={s.current} delta={s.delta} />;
+                  return (
+                    <CharacteristicBar
+                      key={c.key}
+                      label={c.label}
+                      baseline={s.baseline}
+                      current={s.current}
+                      delta={s.delta}
+                      onClick={() => setGuideAttr(c.key)}
+                    />
+                  );
                 })}
               </div>
             </div>
@@ -276,9 +293,17 @@ function SetupLab() {
       </main>
 
       {showAddCar ? <AddCarModal onClose={() => setShowAddCar(false)} onAdd={handleAddCar} /> : null}
+      {guideAttr ? (
+        <GuidePanel
+          attribute={guideAttr}
+          car={selectedCar}
+          onClose={() => setGuideAttr(null)}
+        />
+      ) : null}
     </div>
   );
 }
+
 
 function Selector({
   label,
