@@ -1,4 +1,4 @@
-import { COEFFICIENTS, LAYOUT_MULTIPLIERS } from "./coefficients";
+import { CAR_PARAM_TO_SETTING, COEFFICIENTS, LAYOUT_MULTIPLIERS } from "./coefficients";
 import { SETTINGS } from "./setup-config";
 import {
   CHARACTERISTICS,
@@ -6,8 +6,10 @@ import {
   type LayoutId,
   type SettingKey,
 } from "./setup-types";
+import type { ParameterDef } from "@/car_data/data";
 
 export type SetupValues = Record<SettingKey, { baseline: number; current: number }>;
+export type CarParamValues = Record<string, { baseline: number; current: number }>;
 
 export function makeDefaultValues(): SetupValues {
   const out = {} as SetupValues;
@@ -17,31 +19,24 @@ export function makeDefaultValues(): SetupValues {
   return out;
 }
 
-export type CharacteristicScores = Record<CharacteristicKey, { baseline: number; current: number; delta: number }>;
+export type CharacteristicScores = Record<
+  CharacteristicKey,
+  { baseline: number; current: number; delta: number }
+>;
 
-/** All characteristics start at a neutral 50 (baseline). Deltas push around that. */
 const NEUTRAL = 50;
+/** How many "coefficient units" a full 0→1 normalized delta is worth. */
+const NORM_SCALE = 8;
 
-export function computeScores(values: SetupValues, layout: LayoutId): CharacteristicScores {
+function emptyScores(): CharacteristicScores {
   const scores = {} as CharacteristicScores;
   for (const c of CHARACTERISTICS) {
     scores[c.key] = { baseline: NEUTRAL, current: NEUTRAL, delta: 0 };
   }
-  const mult = LAYOUT_MULTIPLIERS[layout];
+  return scores;
+}
 
-  for (const s of SETTINGS) {
-    const v = values[s.key];
-    if (!v) continue;
-    const deltaUnits = (v.current - v.baseline) / s.unitStep;
-    if (deltaUnits === 0) continue;
-    const row = COEFFICIENTS[s.key];
-    for (const key of Object.keys(row) as CharacteristicKey[]) {
-      const coef = row[key] ?? 0;
-      const layoutMult = mult[key] ?? 1;
-      scores[key].current += deltaUnits * coef * layoutMult;
-    }
-  }
-
+function finalize(scores: CharacteristicScores) {
   for (const c of CHARACTERISTICS) {
     const s = scores[c.key];
     s.current = clamp(s.current, 0, 100);
@@ -50,35 +45,103 @@ export function computeScores(values: SetupValues, layout: LayoutId): Characteri
   return scores;
 }
 
+export function computeScores(values: SetupValues, layout: LayoutId): CharacteristicScores {
+  const scores = emptyScores();
+  const mult = LAYOUT_MULTIPLIERS[layout];
+  for (const s of SETTINGS) {
+    const v = values[s.key];
+    if (!v) continue;
+    const deltaUnits = (v.current - v.baseline) / s.unitStep;
+    if (deltaUnits === 0) continue;
+    applyRow(scores, s.key, deltaUnits, mult);
+  }
+  return finalize(scores);
+}
+
+/**
+ * Compute scores from a real car profile. For each parameter we use the
+ * normalized delta (current - baseline) / (max - min) so different units
+ * (clicks, mm, °, N/mm, %) all contribute on the same scale.
+ */
+export function computeCarScores(
+  values: CarParamValues,
+  params: ParameterDef[],
+  layout: LayoutId,
+): CharacteristicScores {
+  const scores = emptyScores();
+  const mult = LAYOUT_MULTIPLIERS[layout];
+  for (const p of params) {
+    const v = values[p.key];
+    if (!v) continue;
+    const range = p.max - p.min;
+    if (range === 0) continue;
+    const normDelta = (v.current - v.baseline) / range;
+    if (normDelta === 0) continue;
+    const settingKey = CAR_PARAM_TO_SETTING[p.key];
+    if (!settingKey) continue;
+    applyRow(scores, settingKey, normDelta * NORM_SCALE, mult);
+  }
+  return finalize(scores);
+}
+
+function applyRow(
+  scores: CharacteristicScores,
+  settingKey: SettingKey,
+  units: number,
+  mult: Partial<Record<CharacteristicKey, number>>,
+) {
+  const row = COEFFICIENTS[settingKey];
+  if (!row) return;
+  for (const key of Object.keys(row) as CharacteristicKey[]) {
+    const coef = row[key] ?? 0;
+    const layoutMult = mult[key] ?? 1;
+    scores[key].current += units * coef * layoutMult;
+  }
+}
+
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
-export const CHARACTERISTIC_GROUPS: { title: string; items: { key: CharacteristicKey; label: string }[] }[] = [
-  { title: "Corner Entry", items: [
-    { key: "turnIn", label: "Turn In" },
-    { key: "entryRotation", label: "Entry Rotation" },
-    { key: "brakingStability", label: "Braking Stability" },
-  ]},
-  { title: "Mid Corner", items: [
-    { key: "midCornerGrip", label: "Mid Corner Grip" },
-    { key: "rotation", label: "Rotation" },
-  ]},
-  { title: "Corner Exit", items: [
-    { key: "traction", label: "Traction" },
-    { key: "highSpeedStability", label: "Exit Stability" }, // mapped per spec
-  ]},
-  { title: "Kerbs & Bumps", items: [
-    { key: "kerbCompliance", label: "Kerb Compliance" },
-    { key: "bumpCompliance", label: "Bump Compliance" },
-  ]},
-  { title: "Fast & Sweeping Corners", items: [
-    { key: "highSpeedStability", label: "High Speed Stability" },
-    { key: "brakingStability", label: "Confidence" },
-  ]},
+export const CHARACTERISTIC_GROUPS: {
+  title: string;
+  items: { key: CharacteristicKey; label: string }[];
+}[] = [
+  {
+    title: "Corner Entry",
+    items: [
+      { key: "turnIn", label: "Turn In" },
+      { key: "entryRotation", label: "Entry Rotation" },
+      { key: "brakingStability", label: "Braking Stability" },
+    ],
+  },
+  {
+    title: "Mid Corner",
+    items: [
+      { key: "midCornerGrip", label: "Mid Corner Grip" },
+      { key: "rotation", label: "Rotation" },
+    ],
+  },
+  {
+    title: "Corner Exit",
+    items: [{ key: "traction", label: "Traction" }],
+  },
+  {
+    title: "Kerbs & Bumps",
+    items: [
+      { key: "kerbCompliance", label: "Kerb Compliance" },
+      { key: "bumpCompliance", label: "Bump Compliance" },
+    ],
+  },
+  {
+    title: "Fast & Sweeping Corners",
+    items: [
+      { key: "highSpeedCornering", label: "High Speed Cornering" },
+      { key: "fastDirectionChange", label: "Fast Direction Change" },
+    ],
+  },
 ];
 
-/** Generates a setup character summary paragraph from the deltas. */
 export function generateSummary(scores: CharacteristicScores): string {
   const deltas = (Object.keys(scores) as CharacteristicKey[])
     .map((k) => ({ key: k, label: labelFor(k), d: scores[k].delta }))
@@ -97,11 +160,12 @@ export function generateSummary(scores: CharacteristicScores): string {
     parts.push(`This setup increases ${humanList(gains.map((g) => g.label.toLowerCase()))}`);
   }
   if (losses.length) {
-    parts.push(`${parts.length ? " while reducing " : "This setup reduces "}${humanList(losses.map((l) => l.label.toLowerCase()))}`);
+    parts.push(
+      `${parts.length ? " while reducing " : "This setup reduces "}${humanList(losses.map((l) => l.label.toLowerCase()))}`,
+    );
   }
   parts.push(".");
 
-  // Character interpretation
   const topGain = gains[0];
   const topLoss = losses[0];
   let character = "";
@@ -130,8 +194,10 @@ function cornerPhaseFor(k: CharacteristicKey): string {
       return "the middle of the corner";
     case "traction":
       return "corner exit";
-    case "highSpeedStability":
+    case "highSpeedCornering":
       return "fast sweeping corners";
+    case "fastDirectionChange":
+      return "quick direction changes and chicanes";
     case "kerbCompliance":
     case "bumpCompliance":
       return "rough surfaces and kerbs";
