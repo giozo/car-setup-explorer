@@ -1,17 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { SIMULATORS, type LayoutId, type SimulatorId } from "@/lib/setup-types";
 import {
   CHARACTERISTICS,
-  SIMULATORS,
-  type LayoutId,
-  type SimulatorId,
-} from "@/lib/setup-types";
-import {
   CHARACTERISTIC_GROUPS,
   computeCarScores,
   generateSummary,
+  normalizeCarClass,
+  paramGroupLabel,
   type CarParamValues,
+  type Attribute,
 } from "@/lib/calculations";
+import {
+  getAttributeGuide,
+  ATTRIBUTE_LABELS,
+  PARAM_KEY_TO_GROUP,
+  type ParamGroup,
+} from "@/lib/coefficients";
 import {
   BUILT_IN_CARS,
   TAB_ORDER,
@@ -21,6 +26,7 @@ import {
   type ParameterDef,
 } from "@/car_data/data";
 import { AddCarModal } from "@/components/AddCarModal";
+
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -81,15 +87,13 @@ function SetupLab() {
   }, [selectedCarId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const scores = useMemo(() => {
-    if (!selectedCar) {
-      // neutral scores when nothing selected
-      return computeCarScores({}, [], layout);
-    }
-    return computeCarScores(carValues, selectedCar.parameters, layout);
-  }, [carValues, selectedCar, layout]);
+    return computeCarScores(carValues, selectedCar?.parameters ?? [], selectedCar);
+  }, [carValues, selectedCar]);
 
   const summary = useMemo(() => generateSummary(scores), [scores]);
   const simName = SIMULATORS.find((s) => s.id === sim)?.name ?? "";
+
+  const [guideAttr, setGuideAttr] = useState<Attribute | null>(null);
 
   const handleAddCar = (car: CarProfile) => {
     const next = [...userCars, car];
@@ -99,6 +103,25 @@ function SetupLab() {
     setShowAddCar(false);
   };
 
+  const handleDeleteUserCar = (id: string) => {
+    const next = userCars.filter((c) => c.id !== id);
+    setUserCars(next);
+    saveUserCars(next);
+    if (selectedCarId === id) setSelectedCarId("");
+  };
+
+  const handleReset = () => {
+    if (!selectedCar) return;
+    setCarValues((prev) => {
+      const next: CarParamValues = { ...prev };
+      for (const p of selectedCar.parameters) {
+        const mid = (p.min + p.max) / 2;
+        next[p.key] = { baseline: mid, current: mid };
+      }
+      return next;
+    });
+  };
+
   const setCarVal = (def: ParameterDef, which: "baseline" | "current", n: number) => {
     const clamped = Math.max(def.min, Math.min(def.max, n));
     setCarValues((v) => ({
@@ -106,6 +129,7 @@ function SetupLab() {
       [def.key]: { ...(v[def.key] ?? { baseline: clamped, current: clamped }), [which]: clamped },
     }));
   };
+
 
   const groupedParams = useMemo(() => {
     if (!selectedCar) return [];
@@ -151,7 +175,9 @@ function SetupLab() {
                 if (id === "__add__") setShowAddCar(true);
                 else setSelectedCarId(id);
               }}
+              onDeleteUserCar={handleDeleteUserCar}
             />
+
           </div>
         </div>
       </header>
@@ -197,7 +223,7 @@ function SetupLab() {
         <section className="flex-1 overflow-y-auto bg-background p-8">
           <div className="mx-auto max-w-4xl space-y-12">
             <div className="grid grid-cols-1 gap-6">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-medium text-foreground">Vehicle Characteristics</h3>
                   <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
@@ -208,13 +234,30 @@ function SetupLab() {
                 <div className="flex items-center gap-4">
                   <Legend swatchClass="bg-muted" label="Baseline" />
                   <Legend swatchClass="bg-accent" label="Current" />
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    disabled={!selectedCar}
+                    className="rounded border border-border bg-secondary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-foreground hover:bg-accent/20 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Reset
+                  </button>
                 </div>
               </div>
 
               <div className="space-y-5">
                 {CHARACTERISTICS.map((c) => {
                   const s = scores[c.key];
-                  return <CharacteristicBar key={c.key} label={c.label} baseline={s.baseline} current={s.current} delta={s.delta} />;
+                  return (
+                    <CharacteristicBar
+                      key={c.key}
+                      label={c.label}
+                      baseline={s.baseline}
+                      current={s.current}
+                      delta={s.delta}
+                      onClick={() => setGuideAttr(c.key)}
+                    />
+                  );
                 })}
               </div>
             </div>
@@ -252,9 +295,17 @@ function SetupLab() {
       </main>
 
       {showAddCar ? <AddCarModal onClose={() => setShowAddCar(false)} onAdd={handleAddCar} /> : null}
+      {guideAttr ? (
+        <GuidePanel
+          attribute={guideAttr}
+          car={selectedCar}
+          onClose={() => setGuideAttr(null)}
+        />
+      ) : null}
     </div>
   );
 }
+
 
 function Selector({
   label,
@@ -290,44 +341,98 @@ function CarSelector({
   builtIn,
   userCars,
   onSelect,
+  onDeleteUserCar,
 }: {
   value: string;
   builtIn: CarProfile[];
   userCars: CarProfile[];
   onSelect: (id: string) => void;
+  onDeleteUserCar: (id: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const all = [...builtIn, ...userCars];
+  const selected = all.find((c) => c.id === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-car-selector]")) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
   return (
-    <label className="flex items-center gap-2">
+    <div data-car-selector className="relative flex items-center gap-2">
       <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Choose Car:</span>
-      <select
-        value={value}
-        onChange={(e) => onSelect(e.target.value)}
-        className="rounded border border-border bg-secondary px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-accent"
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="min-w-[12rem] rounded border border-border bg-secondary px-2 py-1 text-left text-xs font-medium text-foreground outline-none hover:border-accent/40 focus:ring-1 focus:ring-accent"
       >
-        <option value="">Select a car to begin</option>
-        <optgroup label="Built-in">
-          {builtIn.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </optgroup>
-        {userCars.length > 0 ? (
-          <optgroup label="Your Cars">
-            {userCars.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
+        {selected ? selected.name : <span className="text-muted-foreground">Select a car to begin</span>}
+        <span className="float-right text-muted-foreground">▾</span>
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-full z-50 mt-1 w-72 overflow-hidden rounded border border-border bg-background shadow-xl">
+          <div className="max-h-80 overflow-y-auto py-1">
+            <div className="px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">Built-in</div>
+            {builtIn.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => { onSelect(c.id); setOpen(false); }}
+                className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-accent/15 ${c.id === value ? "text-accent" : "text-foreground"}`}
+              >
+                <span>{c.name}</span>
+              </button>
             ))}
-          </optgroup>
-        ) : null}
-        <optgroup label="──────────">
-          <option value="__add__">+ Add a Car</option>
-        </optgroup>
-      </select>
-    </label>
+            {userCars.length > 0 ? (
+              <>
+                <div className="mt-1 px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">Your Cars</div>
+                {userCars.map((c) => (
+                  <div
+                    key={c.id}
+                    className={`group flex items-center justify-between px-3 py-1.5 text-xs hover:bg-accent/15 ${c.id === value ? "text-accent" : "text-foreground"}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => { onSelect(c.id); setOpen(false); }}
+                      className="flex-1 text-left"
+                    >
+                      {c.name}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${c.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Delete "${c.name}"?`)) onDeleteUserCar(c.id);
+                      }}
+                      className="ml-2 rounded p-1 text-muted-foreground opacity-60 hover:bg-[var(--danger)]/15 hover:text-[var(--danger)] hover:opacity-100"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6h12z"/></svg>
+                    </button>
+                  </div>
+                ))}
+              </>
+            ) : null}
+            <div className="mt-1 border-t border-border" />
+            <button
+              type="button"
+              onClick={() => { onSelect("__add__"); setOpen(false); }}
+              className="flex w-full items-center px-3 py-1.5 text-left text-xs font-medium text-accent hover:bg-accent/15"
+            >
+              + Add a Car
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
+
 
 function ParamRow({
   def,
@@ -431,11 +536,15 @@ function Stepper({
   );
 }
 
-function CharacteristicBar({ label, baseline, current, delta }: { label: string; baseline: number; current: number; delta: number }) {
+function CharacteristicBar({ label, baseline, current, delta, onClick }: { label: string; baseline: number; current: number; delta: number; onClick?: () => void }) {
   return (
-    <div className="space-y-2">
+    <button
+      type="button"
+      onClick={onClick}
+      className="group w-full space-y-2 rounded text-left transition-colors hover:bg-accent/5 focus:outline-none focus:ring-1 focus:ring-accent/40"
+    >
       <div className="flex justify-between text-xs">
-        <span className="font-medium text-foreground/90">{label}</span>
+        <span className="font-medium text-foreground/90 group-hover:text-accent">{label}</span>
         <span className={`font-mono ${textColor(delta)}`}>{fmtDelta(delta)}</span>
       </div>
       <div className="relative h-2 overflow-hidden rounded-full bg-secondary">
@@ -446,9 +555,95 @@ function CharacteristicBar({ label, baseline, current, delta }: { label: string;
         />
         <div className="absolute inset-y-0 w-px bg-foreground/30" style={{ left: `${baseline}%` }} />
       </div>
+    </button>
+  );
+}
+
+function GuidePanel({ attribute, car, onClose }: { attribute: Attribute; car: CarProfile | null; onClose: () => void }) {
+  const guide = useMemo(() => {
+    if (!car) return [] as ReturnType<typeof getAttributeGuide>;
+    return getAttributeGuide(attribute, normalizeCarClass(car.class), car.engineLayout, car.drive);
+  }, [attribute, car]);
+
+  const carParamsByGroup = useMemo(() => {
+    const m = new Map<ParamGroup, ParameterDef[]>();
+    if (!car) return m;
+    for (const p of car.parameters) {
+      const g = PARAM_KEY_TO_GROUP[p.key];
+      if (!g) continue;
+      const arr = m.get(g) ?? [];
+      arr.push(p);
+      m.set(g, arr);
+    }
+    return m;
+  }, [car]);
+
+  const tiers: (1 | 2 | 3)[] = [1, 2, 3];
+  const tierLabel = { 1: "Tier 1 — Highest Impact", 2: "Tier 2 — Meaningful", 3: "Tier 3 — Fine Tuning" } as const;
+
+  return (
+    <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
+      <button type="button" className="flex-1 bg-background/70 backdrop-blur-sm" aria-label="Close guide" onClick={onClose} />
+      <div className="flex h-full w-[26rem] flex-col overflow-hidden border-l border-border bg-background shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Parameter Guide</div>
+            <div className="text-base font-medium text-foreground">{ATTRIBUTE_LABELS[attribute]}</div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">
+          {!car ? (
+            <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Select a car to see its parameter guide.</p>
+          ) : guide.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No coefficient data for <span className="font-mono">{car.class}</span> yet. Use a built-in car class
+              (MX5 Cup, GT3, GT4, TCR) to see the guide.
+            </p>
+          ) : (
+            <div className="space-y-6">
+              {tiers.map((tier) => {
+                const rows = guide.filter((g) => g.tier === tier);
+                if (rows.length === 0) return null;
+                return (
+                  <section key={tier}>
+                    <h4 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-accent">{tierLabel[tier]}</h4>
+                    <ul className="space-y-1.5">
+                      {rows.map((r) => {
+                        const params = carParamsByGroup.get(r.group) ?? [];
+                        const positive = r.coefficient > 0;
+                        return (
+                          <li key={r.group} className="rounded border border-border/60 bg-surface/40 px-3 py-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-foreground">{paramGroupLabel(r.group)}</span>
+                              <span className={`font-mono text-[10px] ${positive ? "text-accent" : "text-[var(--danger)]"}`}>
+                                {positive ? "+" : ""}{r.coefficient.toFixed(2)}
+                              </span>
+                            </div>
+                            {params.length > 0 ? (
+                              <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+                                {params.map((p) => p.label).join(" · ")}
+                              </div>
+                            ) : (
+                              <div className="mt-1 font-mono text-[10px] text-muted-foreground/60">Not adjustable on this car</div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
+
 
 function Legend({ swatchClass, label }: { swatchClass: string; label: string }) {
   return (
