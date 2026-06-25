@@ -536,11 +536,15 @@ function Stepper({
   );
 }
 
-function CharacteristicBar({ label, baseline, current, delta }: { label: string; baseline: number; current: number; delta: number }) {
+function CharacteristicBar({ label, baseline, current, delta, onClick }: { label: string; baseline: number; current: number; delta: number; onClick?: () => void }) {
   return (
-    <div className="space-y-2">
+    <button
+      type="button"
+      onClick={onClick}
+      className="group w-full space-y-2 rounded text-left transition-colors hover:bg-accent/5 focus:outline-none focus:ring-1 focus:ring-accent/40"
+    >
       <div className="flex justify-between text-xs">
-        <span className="font-medium text-foreground/90">{label}</span>
+        <span className="font-medium text-foreground/90 group-hover:text-accent">{label}</span>
         <span className={`font-mono ${textColor(delta)}`}>{fmtDelta(delta)}</span>
       </div>
       <div className="relative h-2 overflow-hidden rounded-full bg-secondary">
@@ -551,9 +555,95 @@ function CharacteristicBar({ label, baseline, current, delta }: { label: string;
         />
         <div className="absolute inset-y-0 w-px bg-foreground/30" style={{ left: `${baseline}%` }} />
       </div>
+    </button>
+  );
+}
+
+function GuidePanel({ attribute, car, onClose }: { attribute: Attribute; car: CarProfile | null; onClose: () => void }) {
+  const guide = useMemo(() => {
+    if (!car) return [] as ReturnType<typeof getAttributeGuide>;
+    return getAttributeGuide(attribute, normalizeCarClass(car.class), car.engineLayout, car.drive);
+  }, [attribute, car]);
+
+  const carParamsByGroup = useMemo(() => {
+    const m = new Map<ParamGroup, ParameterDef[]>();
+    if (!car) return m;
+    for (const p of car.parameters) {
+      const g = PARAM_KEY_TO_GROUP[p.key];
+      if (!g) continue;
+      const arr = m.get(g) ?? [];
+      arr.push(p);
+      m.set(g, arr);
+    }
+    return m;
+  }, [car]);
+
+  const tiers: (1 | 2 | 3)[] = [1, 2, 3];
+  const tierLabel = { 1: "Tier 1 — Highest Impact", 2: "Tier 2 — Meaningful", 3: "Tier 3 — Fine Tuning" } as const;
+
+  return (
+    <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
+      <button type="button" className="flex-1 bg-background/70 backdrop-blur-sm" aria-label="Close guide" onClick={onClose} />
+      <div className="flex h-full w-[26rem] flex-col overflow-hidden border-l border-border bg-background shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Parameter Guide</div>
+            <div className="text-base font-medium text-foreground">{ATTRIBUTE_LABELS[attribute]}</div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">
+          {!car ? (
+            <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Select a car to see its parameter guide.</p>
+          ) : guide.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No coefficient data for <span className="font-mono">{car.class}</span> yet. Use a built-in car class
+              (MX5 Cup, GT3, GT4, TCR) to see the guide.
+            </p>
+          ) : (
+            <div className="space-y-6">
+              {tiers.map((tier) => {
+                const rows = guide.filter((g) => g.tier === tier);
+                if (rows.length === 0) return null;
+                return (
+                  <section key={tier}>
+                    <h4 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-accent">{tierLabel[tier]}</h4>
+                    <ul className="space-y-1.5">
+                      {rows.map((r) => {
+                        const params = carParamsByGroup.get(r.group) ?? [];
+                        const positive = r.coefficient > 0;
+                        return (
+                          <li key={r.group} className="rounded border border-border/60 bg-surface/40 px-3 py-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-foreground">{paramGroupLabel(r.group)}</span>
+                              <span className={`font-mono text-[10px] ${positive ? "text-accent" : "text-[var(--danger)]"}`}>
+                                {positive ? "+" : ""}{r.coefficient.toFixed(2)}
+                              </span>
+                            </div>
+                            {params.length > 0 ? (
+                              <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+                                {params.map((p) => p.label).join(" · ")}
+                              </div>
+                            ) : (
+                              <div className="mt-1 font-mono text-[10px] text-muted-foreground/60">Not adjustable on this car</div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
+
 
 function Legend({ swatchClass, label }: { swatchClass: string; label: string }) {
   return (
