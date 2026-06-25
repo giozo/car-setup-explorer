@@ -341,44 +341,98 @@ function CarSelector({
   builtIn,
   userCars,
   onSelect,
+  onDeleteUserCar,
 }: {
   value: string;
   builtIn: CarProfile[];
   userCars: CarProfile[];
   onSelect: (id: string) => void;
+  onDeleteUserCar: (id: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const all = [...builtIn, ...userCars];
+  const selected = all.find((c) => c.id === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-car-selector]")) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
   return (
-    <label className="flex items-center gap-2">
+    <div data-car-selector className="relative flex items-center gap-2">
       <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Choose Car:</span>
-      <select
-        value={value}
-        onChange={(e) => onSelect(e.target.value)}
-        className="rounded border border-border bg-secondary px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-accent"
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="min-w-[12rem] rounded border border-border bg-secondary px-2 py-1 text-left text-xs font-medium text-foreground outline-none hover:border-accent/40 focus:ring-1 focus:ring-accent"
       >
-        <option value="">Select a car to begin</option>
-        <optgroup label="Built-in">
-          {builtIn.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </optgroup>
-        {userCars.length > 0 ? (
-          <optgroup label="Your Cars">
-            {userCars.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
+        {selected ? selected.name : <span className="text-muted-foreground">Select a car to begin</span>}
+        <span className="float-right text-muted-foreground">▾</span>
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-full z-50 mt-1 w-72 overflow-hidden rounded border border-border bg-background shadow-xl">
+          <div className="max-h-80 overflow-y-auto py-1">
+            <div className="px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">Built-in</div>
+            {builtIn.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => { onSelect(c.id); setOpen(false); }}
+                className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-accent/15 ${c.id === value ? "text-accent" : "text-foreground"}`}
+              >
+                <span>{c.name}</span>
+              </button>
             ))}
-          </optgroup>
-        ) : null}
-        <optgroup label="──────────">
-          <option value="__add__">+ Add a Car</option>
-        </optgroup>
-      </select>
-    </label>
+            {userCars.length > 0 ? (
+              <>
+                <div className="mt-1 px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">Your Cars</div>
+                {userCars.map((c) => (
+                  <div
+                    key={c.id}
+                    className={`group flex items-center justify-between px-3 py-1.5 text-xs hover:bg-accent/15 ${c.id === value ? "text-accent" : "text-foreground"}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => { onSelect(c.id); setOpen(false); }}
+                      className="flex-1 text-left"
+                    >
+                      {c.name}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${c.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Delete "${c.name}"?`)) onDeleteUserCar(c.id);
+                      }}
+                      className="ml-2 rounded p-1 text-muted-foreground opacity-60 hover:bg-[var(--danger)]/15 hover:text-[var(--danger)] hover:opacity-100"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6h12z"/></svg>
+                    </button>
+                  </div>
+                ))}
+              </>
+            ) : null}
+            <div className="mt-1 border-t border-border" />
+            <button
+              type="button"
+              onClick={() => { onSelect("__add__"); setOpen(false); }}
+              className="flex w-full items-center px-3 py-1.5 text-left text-xs font-medium text-accent hover:bg-accent/15"
+            >
+              + Add a Car
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
+
 
 function ParamRow({
   def,
