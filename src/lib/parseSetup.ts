@@ -16,7 +16,15 @@ export function parseACSetup(content: string): Record<string, number> {
 }
 
 // Keys to ignore — not setup parameters
-const SKIP_KEYS = new Set(["CAR", "TYRES", "__EXT_PATCH"]);
+const SKIP_KEYS = new Set([
+  "CAR",
+  "TYRES",
+  "__EXT_PATCH",
+  "PRESSURE_LF",
+  "PRESSURE_RF",
+  "PRESSURE_LR",
+  "PRESSURE_RR",
+]);
 
 // Human-readable metadata for known parameter keys
 const PARAM_META: Record<string, { label: string; unit: string; tab: string }> = {

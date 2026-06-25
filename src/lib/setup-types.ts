@@ -25,7 +25,8 @@ export type CharacteristicKey =
   | "rotation"
   | "traction"
   | "brakingStability"
-  | "highSpeedStability"
+  | "highSpeedCornering"
+  | "fastDirectionChange"
   | "kerbCompliance"
   | "bumpCompliance"
   | "tyreWear";
@@ -37,7 +38,8 @@ export const CHARACTERISTICS: { key: CharacteristicKey; label: string }[] = [
   { key: "rotation", label: "Rotation" },
   { key: "traction", label: "Traction" },
   { key: "brakingStability", label: "Braking Stability" },
-  { key: "highSpeedStability", label: "High Speed Stability" },
+  { key: "highSpeedCornering", label: "High Speed Cornering" },
+  { key: "fastDirectionChange", label: "Fast Direction Change" },
   { key: "kerbCompliance", label: "Kerb Compliance" },
   { key: "bumpCompliance", label: "Bump Compliance" },
   { key: "tyreWear", label: "Tyre Wear" },
@@ -75,7 +77,6 @@ export interface SettingDef {
   label: string;
   tier: Tier;
   unit: string;
-  /** Reasonable step magnitude — used to scale the user's delta into a "normalized click" before applying coefficients. */
   unitStep: number;
   defaultBaseline: number;
 }

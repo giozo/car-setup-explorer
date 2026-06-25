@@ -2,12 +2,16 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   CHARACTERISTICS,
-  LAYOUTS,
   SIMULATORS,
   type LayoutId,
   type SimulatorId,
 } from "@/lib/setup-types";
-import { CHARACTERISTIC_GROUPS, computeScores, generateSummary, makeDefaultValues } from "@/lib/calculations";
+import {
+  CHARACTERISTIC_GROUPS,
+  computeCarScores,
+  generateSummary,
+  type CarParamValues,
+} from "@/lib/calculations";
 import {
   BUILT_IN_CARS,
   TAB_ORDER,
@@ -30,8 +34,6 @@ export const Route = createFileRoute("/")({
   component: SetupLab,
 });
 
-type CarParamValues = Record<string, { baseline: number; current: number }>;
-
 function makeCarValues(car: CarProfile): CarParamValues {
   const out: CarParamValues = {};
   for (const p of car.parameters) {
@@ -41,34 +43,53 @@ function makeCarValues(car: CarProfile): CarParamValues {
   return out;
 }
 
+function layoutFromCar(car: CarProfile | null): LayoutId {
+  if (!car) return "fr_rwd";
+  if (car.drive === "FWD") return "fr_fwd";
+  if (car.engineLayout === "mid") return "mr_rwd";
+  if (car.engineLayout === "rear") return "rr_rwd";
+  return "fr_rwd";
+}
+
+function layoutLabel(id: LayoutId): string {
+  switch (id) {
+    case "fr_rwd": return "Front Engine RWD";
+    case "mr_rwd": return "Mid Engine RWD";
+    case "rr_rwd": return "Rear Engine RWD";
+    case "fr_fwd": return "Front Engine FWD";
+  }
+}
+
 function SetupLab() {
   const [sim, setSim] = useState<SimulatorId>("acc");
-  const [layout, setLayout] = useState<LayoutId>("mr_rwd");
   const [userCars, setUserCars] = useState<CarProfile[]>([]);
   const [selectedCarId, setSelectedCarId] = useState<string>("");
   const [showAddCar, setShowAddCar] = useState(false);
   const [carValues, setCarValues] = useState<CarParamValues>({});
 
-  // Hydrate user cars from localStorage (client only)
   useEffect(() => {
     setUserCars(loadUserCars());
   }, []);
 
   const allCars = useMemo(() => [...BUILT_IN_CARS, ...userCars], [userCars]);
   const selectedCar = allCars.find((c) => c.id === selectedCarId) ?? null;
+  const layout = layoutFromCar(selectedCar);
 
-  // Reset values when car changes
   useEffect(() => {
     if (selectedCar) setCarValues(makeCarValues(selectedCar));
     else setCarValues({});
   }, [selectedCarId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const defaultValues = useMemo(() => makeDefaultValues(), []);
-  const scores = useMemo(() => computeScores(defaultValues, layout), [defaultValues, layout]);
-  const summary = useMemo(() => generateSummary(scores), [scores]);
+  const scores = useMemo(() => {
+    if (!selectedCar) {
+      // neutral scores when nothing selected
+      return computeCarScores({}, [], layout);
+    }
+    return computeCarScores(carValues, selectedCar.parameters, layout);
+  }, [carValues, selectedCar, layout]);
 
+  const summary = useMemo(() => generateSummary(scores), [scores]);
   const simName = SIMULATORS.find((s) => s.id === sim)?.name ?? "";
-  const layoutName = LAYOUTS.find((l) => l.id === layout)?.name ?? "";
 
   const handleAddCar = (car: CarProfile) => {
     const next = [...userCars, car];
@@ -78,14 +99,19 @@ function SetupLab() {
     setShowAddCar(false);
   };
 
-  const setCarVal = (key: string, which: "baseline" | "current", n: number) => {
-    setCarValues((v) => ({ ...v, [key]: { ...v[key], [which]: n } }));
+  const setCarVal = (def: ParameterDef, which: "baseline" | "current", n: number) => {
+    const clamped = Math.max(def.min, Math.min(def.max, n));
+    setCarValues((v) => ({
+      ...v,
+      [def.key]: { ...(v[def.key] ?? { baseline: clamped, current: clamped }), [which]: clamped },
+    }));
   };
 
   const groupedParams = useMemo(() => {
     if (!selectedCar) return [];
     const map = new Map<string, ParameterDef[]>();
     for (const p of selectedCar.parameters) {
+      if (p.tab === "TYRES") continue;
       const arr = map.get(p.tab) ?? [];
       arr.push(p);
       map.set(p.tab, arr);
@@ -95,16 +121,14 @@ function SetupLab() {
       const params = map.get(tab);
       if (params && params.length > 0) ordered.push({ tab, params });
     }
-    // any tab not in TAB_ORDER
     for (const [tab, params] of map.entries()) {
-      if (!TAB_ORDER.includes(tab)) ordered.push({ tab, params });
+      if (!TAB_ORDER.includes(tab) && tab !== "TYRES") ordered.push({ tab, params });
     }
     return ordered;
   }, [selectedCar]);
 
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-accent/30">
-      {/* Header */}
       <header className="sticky top-0 z-50 h-14 border-b border-border bg-background/70 backdrop-blur-md">
         <div className="flex h-full items-center justify-between px-6">
           <div className="flex items-center gap-6">
@@ -118,8 +142,6 @@ function SetupLab() {
 
           <div className="flex items-center gap-3 flex-wrap">
             <Selector label="Sim" value={sim} onChange={(v) => setSim(v as SimulatorId)} options={SIMULATORS.map((s) => ({ id: s.id, name: s.name }))} />
-            <div className="hidden h-6 w-px bg-border sm:block" />
-            <Selector label="Layout" value={layout} onChange={(v) => setLayout(v as LayoutId)} options={LAYOUTS.map((l) => ({ id: l.id, name: l.name }))} />
             <div className="hidden h-6 w-px bg-border sm:block" />
             <CarSelector
               value={selectedCarId}
@@ -135,7 +157,6 @@ function SetupLab() {
       </header>
 
       <main className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
-        {/* Sidebar — Setup inputs */}
         <aside className="w-[22rem] shrink-0 overflow-y-auto border-r border-border bg-background/40">
           {!selectedCar ? (
             <div className="flex h-full items-center justify-center p-6 text-center">
@@ -173,7 +194,6 @@ function SetupLab() {
           )}
         </aside>
 
-        {/* Canvas */}
         <section className="flex-1 overflow-y-auto bg-background p-8">
           <div className="mx-auto max-w-4xl space-y-12">
             <div className="grid grid-cols-1 gap-6">
@@ -181,7 +201,7 @@ function SetupLab() {
                 <div>
                   <h3 className="text-lg font-medium text-foreground">Vehicle Characteristics</h3>
                   <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                    {simName} · {layoutName}
+                    {simName} · {layoutLabel(layout)}
                     {selectedCar ? ` · ${selectedCar.name}` : ""}
                   </p>
                 </div>
@@ -207,7 +227,7 @@ function SetupLab() {
                     {group.items.map((item) => {
                       const d = scores[item.key].delta;
                       return (
-                        <div key={`${group.title}-${item.key}-${item.label}`} className="flex items-center justify-between gap-3">
+                        <div key={`${group.title}-${item.key}`} className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
                             <div className={`size-1 rounded-full ${dotColor(d)}`} />
                             <span className="text-xs text-foreground/90">{item.label}</span>
@@ -235,8 +255,6 @@ function SetupLab() {
     </div>
   );
 }
-
-/* ───────────── subcomponents ───────────── */
 
 function Selector({
   label,
@@ -286,7 +304,7 @@ function CarSelector({
         onChange={(e) => onSelect(e.target.value)}
         className="rounded border border-border bg-secondary px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-accent"
       >
-        <option value="">— Select —</option>
+        <option value="">Select a car to begin</option>
         <optgroup label="Built-in">
           {builtIn.map((c) => (
             <option key={c.id} value={c.id}>
@@ -295,7 +313,7 @@ function CarSelector({
           ))}
         </optgroup>
         {userCars.length > 0 ? (
-          <optgroup label="── Your Cars ──">
+          <optgroup label="Your Cars">
             {userCars.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -318,7 +336,7 @@ function ParamRow({
 }: {
   def: ParameterDef;
   value: { baseline: number; current: number };
-  onChange: (key: string, which: "baseline" | "current", n: number) => void;
+  onChange: (def: ParameterDef, which: "baseline" | "current", n: number) => void;
 }) {
   const delta = value.current - value.baseline;
   const changed = Math.abs(delta) > 1e-6;
@@ -330,8 +348,8 @@ function ParamRow({
         <span className="font-mono text-[10px] text-muted-foreground">{def.unit}</span>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <NumberInput value={value.baseline} step={step} onChange={(n) => onChange(def.key, "baseline", n)} subdued />
-        <NumberInput value={value.current} step={step} onChange={(n) => onChange(def.key, "current", n)} highlight={changed} />
+        <Stepper def={def} value={value.baseline} step={step} subdued onChange={(n) => onChange(def, "baseline", n)} />
+        <Stepper def={def} value={value.current} step={step} highlight={changed} onChange={(n) => onChange(def, "current", n)} />
       </div>
       <div className="mt-1 flex items-center justify-between">
         <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground/70">
@@ -345,37 +363,71 @@ function ParamRow({
   );
 }
 
-function NumberInput({
+function Stepper({
+  def,
   value,
-  onChange,
   step,
   subdued,
   highlight,
+  onChange,
 }: {
+  def: ParameterDef;
   value: number;
-  onChange: (n: number) => void;
   step: number;
   subdued?: boolean;
   highlight?: boolean;
+  onChange: (n: number) => void;
 }) {
+  const atMax = value >= def.max - 1e-9;
+  const atMin = value <= def.min + 1e-9;
+  const inputClass = [
+    "w-full rounded border px-1 py-1 text-center font-mono text-xs outline-none transition-shadow focus:ring-1 focus:ring-accent/60",
+    subdued
+      ? "border-border/60 bg-background/60 text-muted-foreground"
+      : highlight
+        ? "border-accent/40 bg-surface text-accent"
+        : "border-border bg-surface text-foreground",
+  ].join(" ");
+  const btnClass = (disabled: boolean) =>
+    [
+      "flex h-6 w-6 shrink-0 items-center justify-center rounded border font-mono text-xs leading-none",
+      disabled
+        ? "cursor-not-allowed border-border/40 bg-background/40 text-muted-foreground/40"
+        : "border-border bg-secondary text-foreground hover:bg-accent/20 hover:text-accent",
+    ].join(" ");
   return (
-    <input
-      type="number"
-      step={step}
-      value={Number.isFinite(value) ? value : 0}
-      onChange={(e) => {
-        const n = parseFloat(e.target.value);
-        onChange(Number.isFinite(n) ? n : 0);
-      }}
-      className={[
-        "w-full rounded border px-2 py-1 font-mono text-sm outline-none transition-shadow focus:ring-1 focus:ring-accent/60",
-        subdued
-          ? "border-border/60 bg-background/60 text-muted-foreground"
-          : highlight
-            ? "border-accent/40 bg-surface text-accent"
-            : "border-border bg-surface text-foreground",
-      ].join(" ")}
-    />
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        disabled={atMin}
+        aria-label={`Decrease ${def.label}`}
+        onClick={() => onChange(value - step)}
+        className={btnClass(atMin)}
+      >
+        −
+      </button>
+      <input
+        type="number"
+        step={step}
+        min={def.min}
+        max={def.max}
+        value={Number.isFinite(value) ? +value.toFixed(4) : 0}
+        onChange={(e) => {
+          const n = parseFloat(e.target.value);
+          onChange(Number.isFinite(n) ? n : def.min);
+        }}
+        className={inputClass}
+      />
+      <button
+        type="button"
+        disabled={atMax}
+        aria-label={`Increase ${def.label}`}
+        onClick={() => onChange(value + step)}
+        className={btnClass(atMax)}
+      >
+        +
+      </button>
+    </div>
   );
 }
 
@@ -432,6 +484,3 @@ function roundSmart(n: number): string {
   if (Math.abs(n) >= 1) return n.toFixed(1);
   return n.toFixed(2);
 }
-
-// suppress unused warnings (kept for future per-car-driven scoring)
-void makeDefaultValues;
