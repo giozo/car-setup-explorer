@@ -175,7 +175,9 @@ function SetupLab() {
                 if (id === "__add__") setShowAddCar(true);
                 else setSelectedCarId(id);
               }}
+              onDeleteUserCar={handleDeleteUserCar}
             />
+
           </div>
         </div>
       </header>
